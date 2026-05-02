@@ -74,28 +74,11 @@ async def analyze_food_image(
         f"НЕ повторяй цифры бюджета в ответе. Только русский язык."
     )
 
-    async def _call(client: AsyncOpenAI) -> dict:
-        response = await client.chat.completions.create(
-            model=settings.VISION_MODEL,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                ],
-            }],
-            max_tokens=600,
-        )
-        content = response.choices[0].message.content or ""
-        if _is_refusal(content):
-            raise RuntimeError(f"Model refused to analyze image: {content[:80]}")
+    def _build_result(content: str) -> dict:
         calories = _extract_calories(content)
-
-        # Apply portion factor if user specified "half", "30%", etc.
         factor = parse_portion_factor(portion_caption)
         if factor != 1.0 and calories > 0:
             calories = round(calories * factor)
-
         return {
             "description": content,
             "calories": calories,
@@ -104,7 +87,34 @@ async def analyze_food_image(
             "remaining_after": remaining - calories,
         }
 
-    return await proxy_manager.call(_call)
+    def _make_call(model: str):
+        async def _call(client: AsyncOpenAI) -> dict:
+            response = await client.chat.completions.create(
+                model=model,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                    ],
+                }],
+                max_tokens=600,
+            )
+            content = response.choices[0].message.content or ""
+            if _is_refusal(content):
+                raise RuntimeError(f"Model refused to analyze image: {content[:80]}")
+            return _build_result(content)
+        return _call
+
+    try:
+        return await proxy_manager.call(_make_call(settings.VISION_MODEL))
+    except RuntimeError as exc:
+        if "refused" in str(exc) and settings.VISION_MODEL_FALLBACK != settings.VISION_MODEL:
+            logger.warning(
+                f"Primary vision model refused, falling back to {settings.VISION_MODEL_FALLBACK}"
+            )
+            return await proxy_manager.call(_make_call(settings.VISION_MODEL_FALLBACK))
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +276,10 @@ _REFUSAL_PHRASES = (
     "i'm sorry, i can't",
     "i cannot",
     "i can't do that",
+    "i can't help with that",
+    "i can't assist with this",
+    "i can't assist with that",
+    "i'm unable to",
     "не могу анализировать",
     "не могу обработать",
     "не могу помочь",

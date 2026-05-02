@@ -12,7 +12,8 @@ class Settings(BaseSettings):
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
 
     # Models (all via OpenRouter)
-    VISION_MODEL: str = "openai/gpt-4o"          # food photo analysis
+    VISION_MODEL: str = "openai/gpt-4o"                        # food photo analysis (primary)
+    VISION_MODEL_FALLBACK: str = "google/gemini-2.0-flash-001" # fallback when primary refuses
     TEXT_MODEL: str = "openai/gpt-4o"             # recipe text
     IMAGE_MODEL: str = "openai/dall-e-3"          # recipe illustration
     TRANSCRIPTION_MODEL: str = "google/gemini-2.0-flash-001"  # voice → text (supports audio)
