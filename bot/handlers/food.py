@@ -42,10 +42,12 @@ async def handle_food_photo(message: Message, bot: Bot):
         async with AsyncSessionLocal() as db:
             consumed_today = await get_today_consumed(db, user.id)
 
+        caption = message.caption or ""
         result = await analyze_food_image(
             image_bytes,
             daily_calories=user.daily_calories,
             consumed_today=consumed_today,
+            portion_caption=caption,
         )
 
         if result["calories"] == 0:
@@ -76,10 +78,13 @@ async def handle_food_photo(message: Message, bot: Bot):
 
         remaining = user.daily_calories - consumed_today
         status_icon = "⚠️" if result["exceeds_budget"] else "✅"
+        factor = result.get("portion_factor", 1.0)
+        portion_note = f"\n🍽️ <i>Учтена порция: {round(factor * 100)}%</i>" if factor != 1.0 else ""
 
         text = (
             f"{status_icon} <b>Результат анализа:</b>\n\n"
-            f"{result['description']}\n\n"
+            f"{result['description']}"
+            f"{portion_note}\n\n"
             f"📊 Дневной бюджет: {consumed_today} + {result['calories']} = "
             f"<b>{consumed_today + result['calories']}</b> / {user.daily_calories} ккал"
         )

@@ -20,25 +20,58 @@ logger = logging.getLogger(__name__)
 # Food photo analysis
 # ---------------------------------------------------------------------------
 
+def parse_portion_factor(caption: str) -> float:
+    """
+    Parse a portion modifier from user caption.
+    Returns a float multiplier (e.g. 0.5 for "половину", 1.0 if no modifier found).
+    """
+    if not caption:
+        return 1.0
+    t = caption.lower()
+
+    # Explicit fractions / words
+    _MAP = {
+        "половин": 0.5, "полов": 0.5, "1/2": 0.5,
+        "треть": 1/3, "1/3": 1/3,
+        "четверт": 0.25, "1/4": 0.25,
+        "три четверт": 0.75, "3/4": 0.75,
+        "двух трет": 2/3, "2/3": 2/3,
+    }
+    for key, val in _MAP.items():
+        if key in t:
+            return val
+
+    # Percentage: "80%", "70 %", "30 процентов"
+    m = re.search(r"(\d+)\s*(?:%|процент)", t)
+    if m:
+        pct = int(m.group(1))
+        if 1 <= pct <= 100:
+            return pct / 100
+
+    return 1.0
+
+
 async def analyze_food_image(
     image_bytes: bytes,
     daily_calories: int,
     consumed_today: int,
+    portion_caption: str = "",
 ) -> dict:
     remaining = daily_calories - consumed_today
     b64 = base64.b64encode(image_bytes).decode("utf-8")
 
     prompt = (
-        f"Ты — нутрициолог-ассистент. Проанализируй фото еды строго в формате:\n\n"
+        f"Ты — нутрициолог-ассистент. Проанализируй фото еды и ответь СТРОГО в этом формате "
+        f"(без лишних слов, только шаблон ниже):\n\n"
         f"🍽️ Блюдо: [название]\n"
         f"🔥 Калории: [число] ккал\n"
         f"📊 БЖУ: Белки [г]г | Жиры [г]г | Углеводы [г]г\n"
         f"📝 Описание: [1-2 предложения]\n\n"
-        f"Контекст: норма {daily_calories} ккал, съедено {consumed_today} ккал, "
-        f"осталось {remaining} ккал.\n"
-        f"Если калории превышают остаток ({remaining} ккал) — добавь:\n"
+        f"Дневной бюджет пользователя: {daily_calories} ккал, уже съедено: {consumed_today} ккал, "
+        f"остаток: {remaining} ккал.\n"
+        f"Если калории блюда превышают остаток — добавь в ответ:\n"
         f"⚠️ Рекомендации: [конкретные советы]\n\n"
-        f"Только русский язык."
+        f"НЕ повторяй цифры бюджета в ответе. Только русский язык."
     )
 
     async def _call(client: AsyncOpenAI) -> dict:
@@ -57,9 +90,16 @@ async def analyze_food_image(
         if _is_refusal(content):
             raise RuntimeError(f"Model refused to analyze image: {content[:80]}")
         calories = _extract_calories(content)
+
+        # Apply portion factor if user specified "half", "30%", etc.
+        factor = parse_portion_factor(portion_caption)
+        if factor != 1.0 and calories > 0:
+            calories = round(calories * factor)
+
         return {
             "description": content,
             "calories": calories,
+            "portion_factor": factor,
             "exceeds_budget": calories > remaining,
             "remaining_after": remaining - calories,
         }
@@ -242,6 +282,17 @@ def _is_refusal(text: str) -> bool:
 
 
 def _extract_calories(text: str) -> int:
+    # Only search in the structured part — stop before any budget/context echoes
+    # (lines that contain "бюджет", "норма", "съедено", "остаток", "осталось")
+    lines = text.splitlines()
+    analysis_lines = []
+    for line in lines:
+        ll = line.lower()
+        if any(kw in ll for kw in ("бюджет", "норма", "съедено", "остаток", "осталось", "дневн")):
+            break
+        analysis_lines.append(line)
+    search_text = "\n".join(analysis_lines) if analysis_lines else text
+
     patterns = [
         r"[Кк]алорийность[^\d]*(\d+)",
         r"[Кк]алори[ий][^\d]*(\d+)",
@@ -252,10 +303,10 @@ def _extract_calories(text: str) -> int:
         r"🔥[^\d]*(\d+)",
     ]
     for pattern in patterns:
-        m = re.search(pattern, text, re.IGNORECASE)
+        m = re.search(pattern, search_text, re.IGNORECASE)
         if m:
             val = int(m.group(1))
-            if 50 <= val <= 5000:
+            if 1 <= val <= 5000:
                 return val
     return 0
 

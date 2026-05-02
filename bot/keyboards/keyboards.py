@@ -44,3 +44,14 @@ def profile_update_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✏️ Обновить профиль", callback_data="update_profile")],
     ])
+
+
+def food_log_manage_keyboard(logs: list) -> InlineKeyboardMarkup:
+    """Show each confirmed log entry with a delete button."""
+    rows = []
+    for log in logs:
+        time_str = log.created_at.strftime("%H:%M")
+        label = f"🗑 {time_str} — {log.food_description[:25]} ({log.calories} ккал)"
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"del_log:{log.id}")])
+    rows.append([InlineKeyboardButton(text="✖️ Закрыть", callback_data="del_log:close")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
